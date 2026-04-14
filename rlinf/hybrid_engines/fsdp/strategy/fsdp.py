@@ -41,6 +41,39 @@ from rlinf.utils.utils import clear_memory
 
 
 class FSDPStrategy(FSDPStrategyBase):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._cpu_sync_group = None
+
+    def _use_openpi_manual_data_parallel(self) -> bool:
+        return (
+            self.cfg.model.model_type == "openpi"
+            and self.world_size > 1
+            and str(self.cfg.fsdp_config.sharding_strategy).lower() == "no_shard"
+        )
+
+    def _get_cpu_sync_group(self):
+        if self._cpu_sync_group is None:
+            self._cpu_sync_group = torch.distributed.new_group(backend="gloo")
+        return self._cpu_sync_group
+
+    @torch.no_grad()
+    def _sync_gradients_via_cpu(self, model: nn.Module) -> None:
+        if not self._use_openpi_manual_data_parallel():
+            return
+
+        group = self._get_cpu_sync_group()
+        for param in model.parameters():
+            if param.grad is None:
+                continue
+            grad = param.grad.detach()
+            cpu_grad = grad.float().cpu()
+            torch.distributed.all_reduce(
+                cpu_grad, op=torch.distributed.ReduceOp.SUM, group=group
+            )
+            cpu_grad.div_(self.world_size)
+            grad.copy_(cpu_grad.to(device=grad.device, dtype=grad.dtype))
+
     def wrap_model(self, model: nn.Module, device_mesh: DeviceMesh) -> FSDP:
         """
         Wrap the model with FSDP using the specified configuration,
@@ -53,6 +86,11 @@ class FSDPStrategy(FSDPStrategyBase):
         Returns:
             - FSDP: The wrapped FSDP model.
         """
+        local_rank = int(os.environ["LOCAL_RANK"])
+
+        if self._use_openpi_manual_data_parallel():
+            return model.to(torch.device(f"{Worker.torch_device_type}:{local_rank}"))
+
         mixed_precision_config = self.cfg.fsdp_config.mixed_precision
         param_dtype = torch_dtype_from_precision(mixed_precision_config.param_dtype)
         reduce_dtype = torch_dtype_from_precision(mixed_precision_config.reduce_dtype)
@@ -78,14 +116,21 @@ class FSDPStrategy(FSDPStrategyBase):
             self.cfg.fsdp_config.backward_prefetch
         )
 
+        sync_module_states = True
+        # OpenPI loads the same checkpoint on every rank before FSDP wrapping.
+        # Disabling the initial parameter broadcast avoids a CUDA illegal-memory-access
+        # path we hit specifically in multi-GPU OpenPI initialization.
+        if self.cfg.model.model_type == "openpi" and self.world_size > 1:
+            sync_module_states = False
+
         fsdp_model = FSDP(
             module=model,
             param_init_fn=init_fn,
             auto_wrap_policy=auto_wrap_policy,
-            device_id=int(os.environ["LOCAL_RANK"]),
+            device_id=local_rank,
             sharding_strategy=sharding_strategy,
             mixed_precision=mixed_precision,
-            sync_module_states=True,
+            sync_module_states=sync_module_states,
             device_mesh=device_mesh,
             forward_prefetch=self.cfg.fsdp_config.forward_prefetch,
             backward_prefetch=backward_prefetch,
@@ -109,6 +154,9 @@ class FSDPStrategy(FSDPStrategyBase):
         Returns:
             Dict: The full state dict of the optimizer.
         """
+        if self._use_openpi_manual_data_parallel():
+            return optimizer.state_dict()
+
         with FSDP.state_dict_type(
             module=model, state_dict_type=StateDictType.FULL_STATE_DICT
         ):
@@ -123,6 +171,15 @@ class FSDPStrategy(FSDPStrategyBase):
             - model (FSDP): The FSDP wrapped model.
             - offload_grad (bool): Whether to offload gradients or not.
         """
+        if self._use_openpi_manual_data_parallel():
+            for param in model.parameters():
+                if param.data is not None:
+                    param.data = param.data.to("cpu", non_blocking=True)
+                if offload_grad and param.grad is not None:
+                    param.grad = param.grad.to("cpu", non_blocking=True)
+            clear_memory()
+            return
+
         for _, param in model.named_parameters():
             if hasattr(param, "_handle") and param._handle is not None:
                 flat_param = param._handle.flat_param
@@ -159,6 +216,15 @@ class FSDPStrategy(FSDPStrategyBase):
             - onload_grad (bool): Whether to load gradients or not.
 
         """
+        if self._use_openpi_manual_data_parallel():
+            for param in model.parameters():
+                if param.data is not None:
+                    param.data = param.data.to(device, non_blocking=True)
+                if onload_grad and param.grad is not None:
+                    param.grad = param.grad.to(device, non_blocking=True)
+            clear_memory()
+            return
+
         for _, param in model.named_parameters():
             if hasattr(param, "_handle") and param._handle is not None:
                 flat_param = param._handle.flat_param
@@ -235,6 +301,18 @@ class FSDPStrategy(FSDPStrategyBase):
         Returns:
             - float: The total norm of the gradients before clipping.
         """
+        if self._use_openpi_manual_data_parallel():
+            self._sync_gradients_via_cpu(model)
+            return (
+                torch.nn.utils.clip_grad_norm_(
+                    model.parameters(),
+                    float(self.cfg.optim.clip_grad),
+                    float(norm_type),
+                )
+                .cpu()
+                .item()
+            )
+
         device = torch.device(f"{Worker.torch_device_type}:{os.environ['LOCAL_RANK']}")
         max_norm = float(self.cfg.optim.clip_grad)
         norm_type = float(norm_type)
@@ -347,5 +425,7 @@ class FSDPStrategy(FSDPStrategyBase):
             - ContextManager: The context manager for gradient synchronization.
         """
         if self.cfg.fsdp_config.enable_gradient_accumulation:
+            if self._use_openpi_manual_data_parallel():
+                return nullcontext()
             return model.no_sync() if not is_last_micro_batch else nullcontext()
         return nullcontext()

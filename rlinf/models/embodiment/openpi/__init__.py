@@ -95,11 +95,32 @@ def get_model(cfg: DictConfig, torch_dtype=None):
     )
     norm_stats = None
     if norm_stats is None:
-        # We are loading the norm stats from the checkpoint instead of the config assets dir to make sure
-        # that the policy is using the same normalization stats as the original training process.
+        # Prefer checkpoint-local stats for reproducibility, but fall back to dataset-local stats
+        # when training new experiments where stats exist only under HF_LEROBOT_HOME/<repo_id>.
         if data_config.asset_id is None:
             raise ValueError("Asset id is required to load norm stats.")
-        norm_stats = _checkpoints.load_norm_stats(checkpoint_dir, data_config.asset_id)
+
+        norm_stats_candidates: list[str] = [str(checkpoint_dir)]
+        hf_lerobot_home = os.environ.get("HF_LEROBOT_HOME")
+        if hf_lerobot_home:
+            norm_stats_candidates.append(hf_lerobot_home)
+
+        last_err: Exception | None = None
+        for base_dir in norm_stats_candidates:
+            try:
+                norm_stats = _checkpoints.load_norm_stats(base_dir, data_config.asset_id)
+                break
+            except FileNotFoundError as err:
+                last_err = err
+
+        if norm_stats is None:
+            searched = ", ".join(
+                f"{base}/{data_config.asset_id}/norm_stats.json"
+                for base in norm_stats_candidates
+            )
+            raise FileNotFoundError(
+                f"Norm stats file not found. Searched: {searched}"
+            ) from last_err
     # wrappers
     repack_transforms = transforms.Group()
     default_prompt = None

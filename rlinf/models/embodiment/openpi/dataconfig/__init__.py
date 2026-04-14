@@ -430,10 +430,25 @@ def _override_with_model_path(config: TrainConfig, model_path: str) -> TrainConf
 
 
 def _override_with_data_kwargs(config: TrainConfig, data_kwargs: dict) -> TrainConfig:
-    """Return a copy of the config with data_config set from openpi_data."""
-    data_config = dataclasses.replace(config.data, **data_kwargs)
-    replace_kwargs = {"data": data_config}
-    return dataclasses.replace(config, **replace_kwargs)
+    """Return a copy of the config with data_config set from openpi_data.
+
+    When repo_id changes, also update assets.asset_id so that norm_stats are looked up
+    under the new repo_id instead of the hardcoded default.
+    """
+    data_config = config.data
+    new_repo_id = data_kwargs.get("repo_id")
+    if (
+        new_repo_id
+        and dataclasses.is_dataclass(data_config)
+        and hasattr(data_config, "assets")
+        and dataclasses.is_dataclass(data_config.assets)
+    ):
+        data_config = dataclasses.replace(
+            data_config,
+            assets=dataclasses.replace(data_config.assets, asset_id=new_repo_id),
+        )
+    data_config = dataclasses.replace(data_config, **data_kwargs)
+    return dataclasses.replace(config, data=data_config)
 
 
 def get_openpi_config(

@@ -44,14 +44,27 @@ class LeRobotLiberoDataConfig(DataConfigFactory):
         # For your own dataset, first figure out what keys your environment passes to the policy server
         # and then modify the mappings below so your dataset's keys get matched to those target keys.
         # The repack transform simply remaps key names here.
+        image_key = "image"
+        wrist_image_key = "wrist_image"
+        state_key = "state"
+        action_key = "actions"
+        action_sequence_keys = ("actions",)
+        # Some LeRobot LIBERO-plus datasets use Hugging Face flattened keys.
+        if "libero_plus" in self.repo_id:
+            image_key = "observation.images.front"
+            wrist_image_key = "observation.images.wrist"
+            state_key = "observation.state"
+            action_key = "action"
+            action_sequence_keys = ("action",)
+
         repack_transform = _transforms.Group(
             inputs=[
                 _transforms.RepackTransform(
                     {
-                        "observation/image": "image",
-                        "observation/wrist_image": "wrist_image",
-                        "observation/state": "state",
-                        "actions": "actions",
+                        "observation/image": image_key,
+                        "observation/wrist_image": wrist_image_key,
+                        "observation/state": state_key,
+                        "actions": action_key,
                         "prompt": "prompt",
                     }
                 )
@@ -99,4 +112,5 @@ class LeRobotLiberoDataConfig(DataConfigFactory):
             repack_transforms=repack_transform,
             data_transforms=data_transforms,
             model_transforms=model_transforms,
+            action_sequence_keys=action_sequence_keys,
         )

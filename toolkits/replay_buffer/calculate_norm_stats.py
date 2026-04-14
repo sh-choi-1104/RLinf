@@ -13,20 +13,28 @@
 # limitations under the License.
 
 import os
+import pathlib
+from typing import Any, Callable
 
 import numpy as np
-import openpi.models.model as _model
-import openpi.shared.normalize as normalize
-import openpi.training.data_loader as _data_loader
-import openpi.transforms as transforms
-import tqdm
-import tyro
-from openpi.training.config import DataConfig
-
-from rlinf.models.embodiment.openpi.dataconfig import get_openpi_config
 
 
-class RemoveStrings(transforms.DataTransformFn):
+def _get_openpi_modules():
+    import openpi.models.model as _model
+    import openpi.shared.normalize as normalize
+    import openpi.training.data_loader as _data_loader
+    import openpi.transforms as transforms
+
+    return _model, normalize, _data_loader, transforms
+
+
+def _get_config_loader() -> Callable[..., Any]:
+    from rlinf.models.embodiment.openpi.dataconfig import get_openpi_config
+
+    return get_openpi_config
+
+
+class RemoveStrings:
     def __call__(self, x: dict) -> dict:
         return {
             k: v
@@ -36,13 +44,14 @@ class RemoveStrings(transforms.DataTransformFn):
 
 
 def create_torch_dataloader(
-    data_config: DataConfig,
+    data_config: Any,
     action_horizon: int,
     batch_size: int,
-    model_config: _model.BaseModelConfig,
+    model_config: Any,
     num_workers: int,
     max_frames: int | None = None,
-) -> tuple[_data_loader.TorchDataLoader, int]:
+) -> tuple[Any, int]:
+    _, _, _data_loader, _ = _get_openpi_modules()
     if data_config.repo_id is None:
         raise ValueError("Data config must have a repo_id")
     dataset = _data_loader.create_torch_dataset(
@@ -74,11 +83,12 @@ def create_torch_dataloader(
 
 
 def create_rlds_dataloader(
-    data_config: DataConfig,
+    data_config: Any,
     action_horizon: int,
     batch_size: int,
     max_frames: int | None = None,
-) -> tuple[_data_loader.Dataset, int]:
+) -> tuple[Any, int]:
+    _, _, _data_loader, _ = _get_openpi_modules()
     dataset = _data_loader.create_rlds_dataset(
         data_config, action_horizon, batch_size, shuffle=False
     )
@@ -104,20 +114,50 @@ def create_rlds_dataloader(
     return data_loader, num_batches
 
 
+def build_train_config(
+    config_name: str,
+    repo_id: str,
+    model_path: str | None = None,
+) -> Any:
+    """Build an OpenPI train config with an optional model checkpoint root."""
+    get_openpi_config = _get_config_loader()
+    return get_openpi_config(
+        config_name,
+        model_path=model_path,
+        data_kwargs={"repo_id": repo_id},
+    )
+
+
+def resolve_norm_stats_output_path(
+    assets_root: str | os.PathLike[str],
+    repo_id: str,
+) -> pathlib.Path:
+    """Resolve the directory that will store the generated normalization stats."""
+    return pathlib.Path(assets_root) / repo_id
+
+
 def main(
     config_name: str,
     repo_id: str,
+    model_path: str | None = None,
 ):
+    import tqdm
+
+    if os.path.isabs(repo_id):
+        raise ValueError(
+            "repo_id must be a LeRobot dataset name such as 'libero_plus' or "
+            "'namespace/libero_plus', not an absolute path. Set HF_LEROBOT_HOME "
+            "to the dataset root and pass only the dataset directory name here."
+        )
+
     if not os.environ.get("HF_LEROBOT_HOME"):
         raise EnvironmentError(
             "HF_LEROBOT_HOME must be set before running this script. "
             "Export it manually, for example: "
             "export HF_LEROBOT_HOME=/path/to/lerobot_root"
         )
-    config = get_openpi_config(
-        config_name,
-        data_kwargs={"repo_id": repo_id},
-    )
+    _, normalize, _, _ = _get_openpi_modules()
+    config = build_train_config(config_name, repo_id, model_path=model_path)
     data_config = config.data.create(config.assets_dirs, config.model)
 
     if data_config.rlds_data_dir is not None:
@@ -142,10 +182,12 @@ def main(
 
     norm_stats = {key: stats.get_statistics() for key, stats in stats.items()}
 
-    output_path = config.assets_dirs / data_config.repo_id
+    output_path = resolve_norm_stats_output_path(config.assets_dirs, data_config.repo_id)
     print(f"Writing stats to: {output_path}")
     normalize.save(output_path, norm_stats)
 
 
 if __name__ == "__main__":
+    import tyro
+
     tyro.cli(main)
