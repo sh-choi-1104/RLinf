@@ -150,15 +150,23 @@ class LiberoEnv(gym.Env):
                         sys.modules["libero.libero.envs"] = real_envs
 
                         loaded_path = os.path.dirname(real_core.__file__)
-                        os.environ["LIBERO_ASSET_ROOT"] = os.path.join(
-                            loaded_path, "assets"
+                        asset_root = os.environ.get(
+                            "LIBERO_ASSET_ROOT", os.path.join(loaded_path, "assets")
                         )
+                        os.environ["LIBERO_ASSET_ROOT"] = asset_root
                         os.environ["LIBERO_BDDL_PATH"] = os.path.join(
                             loaded_path, "bddl_files"
                         )
                         os.environ["LIBERO_INIT_STATES_PATH"] = os.path.join(
                             loaded_path, "init_files"
                         )
+
+                        # LIBERO arenas resolve relative XML paths through robosuite's
+                        # global assets root, so keep it aligned with the selected asset
+                        # bundle when evaluating LIBERO Pro / Plus.
+                        import robosuite.models as robosuite_models
+
+                        robosuite_models.assets_root = asset_root
 
                         WorkerEnv = real_envs.OffScreenRenderEnv
 

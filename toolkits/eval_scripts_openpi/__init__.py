@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import contextlib
 import logging
 import os
 import pathlib
@@ -19,13 +20,14 @@ from typing import Any
 
 import openpi.policies.policy as _policy
 import openpi.shared.download as download
+import openpi.shared.normalize as _normalize
 import openpi.transforms as transforms
 import safetensors
 from openpi.models_pytorch import pi0_pytorch
 from openpi.training import checkpoints as _checkpoints
 from openpi.training import config as _config
 
-from rlinf.models.embodiment.openpi.dataconfig import _CONFIGS_DICT
+from rlinf.models.embodiment.openpi.dataconfig import get_openpi_config
 
 
 def setup_logger(exp_name, log_dir):
@@ -41,10 +43,55 @@ def setup_logger(exp_name, log_dir):
     return logger
 
 
+@contextlib.contextmanager
+def _maybe_disable_torch_compile():
+    disable_compile = os.environ.get("RLINF_OPENPI_DISABLE_TORCH_COMPILE", "1") == "1"
+    if not disable_compile:
+        yield
+        return
+
+    import torch
+
+    original_compile = getattr(torch, "compile", None)
+    if original_compile is None:
+        yield
+        return
+
+    logging.info("Disabling torch.compile while constructing the OpenPI PyTorch model.")
+
+    def _identity_compile(model_or_fn, *args, **kwargs):
+        return model_or_fn
+
+    torch.compile = _identity_compile
+    try:
+        yield
+    finally:
+        torch.compile = original_compile
+
+
 def load_pytorch(train_config, weight_path: str):
-    model = pi0_pytorch.PI0Pytorch(config=train_config.model)
-    safetensors.torch.load_model(model, weight_path, strict=False)
+    with _maybe_disable_torch_compile():
+        model = pi0_pytorch.PI0Pytorch(config=train_config.model)
+    if weight_path.endswith(".pt"):
+        import torch
+
+        model_state_dict = torch.load(weight_path, map_location="cpu")
+        model.load_state_dict(model_state_dict, strict=False)
+    else:
+        safetensors.torch.load_model(model, weight_path, strict=False)
     return model
+
+
+def _resolve_pytorch_weight_path(checkpoint_dir: str) -> str | None:
+    candidates = [
+        os.path.join(checkpoint_dir, "model.safetensors"),
+        os.path.join(checkpoint_dir, "model_state_dict", "full_weights.pt"),
+        os.path.join(checkpoint_dir, "actor", "model_state_dict", "full_weights.pt"),
+    ]
+    for candidate in candidates:
+        if os.path.exists(candidate):
+            return candidate
+    return None
 
 
 def create_trained_policy(
@@ -55,49 +102,37 @@ def create_trained_policy(
     sample_kwargs: dict[str, Any] | None = None,
     default_prompt: str | None = None,
     norm_stats: dict[str, transforms.NormStats] | None = None,
+    norm_stats_dir: pathlib.Path | str | None = None,
     pytorch_device: str | None = None,
 ) -> _policy.Policy:
-    """Create a policy from a trained checkpoint.
-
-    Args:
-        train_config: The training config to use to create the model.
-        checkpoint_dir: The directory to load the model from.
-        repack_transforms: Optional transforms that will be applied before any other transforms.
-        sample_kwargs: The kwargs to pass to the `sample_actions` method. If not provided, the default
-            kwargs will be used.
-        default_prompt: The default prompt to use for the policy. Will inject the prompt into the input
-            data if it doesn't already exist.
-        norm_stats: The norm stats to use for the policy. If not provided, the norm stats will be loaded
-            from the checkpoint directory.
-        pytorch_device: Device to use for PyTorch models (e.g., "cpu", "cuda", "cuda:0").
-                      If None and is_pytorch=True, will use "cuda" if available, otherwise "cpu".
-
-    Note:
-        The function automatically detects whether the model is PyTorch-based by checking for the
-        presence of "model.safensors" in the checkpoint directory.
-    """
+    """Create a policy from a trained checkpoint."""
     repack_transforms = repack_transforms or transforms.Group()
     checkpoint_dir = download.maybe_download(str(checkpoint_dir))
 
-    # Check if this is a PyTorch model by looking for model.safetensors
-    weight_path = os.path.join(checkpoint_dir, "model.safetensors")
-    is_pytorch = os.path.exists(weight_path)
+    weight_path = _resolve_pytorch_weight_path(checkpoint_dir)
+    is_pytorch = weight_path is not None
 
     logging.info("Loading model...")
     if is_pytorch:
         model = load_pytorch(train_config, weight_path)
         model.paligemma_with_expert.to_bfloat16_for_selected_params("bfloat16")
     else:
-        assert False, "Only PyTorch models are supported for now"
+        raise AssertionError("Only PyTorch models are supported for now")
+
     data_config = train_config.data.create(train_config.assets_dirs, train_config.model)
     if norm_stats is None:
         # We are loading the norm stats from the checkpoint instead of the config assets dir to make sure
         # that the policy is using the same normalization stats as the original training process.
         if data_config.asset_id is None:
             raise ValueError("Asset id is required to load norm stats.")
-        norm_stats = _checkpoints.load_norm_stats(checkpoint_dir, data_config.asset_id)
+        try:
+            norm_stats = _checkpoints.load_norm_stats(checkpoint_dir, data_config.asset_id)
+        except FileNotFoundError:
+            if norm_stats_dir is None:
+                raise
+            logging.info("Falling back to norm stats from %s", norm_stats_dir)
+            norm_stats = _normalize.load(norm_stats_dir)
 
-    # Determine the device to use for PyTorch models
     if is_pytorch and pytorch_device is None:
         import torch
 
@@ -134,12 +169,15 @@ def create_trained_policy(
     )
 
 
-# setup the policy
 def setup_policy(args):
-    config = _CONFIGS_DICT[args.config_name]
+    data_kwargs = None
+    if getattr(args, "repo_id", None):
+        data_kwargs = {"repo_id": args.repo_id}
+    config = get_openpi_config(args.config_name, data_kwargs=data_kwargs)
     policy = create_trained_policy(
         config,
         args.pretrained_path,
         sample_kwargs={"num_steps": args.num_steps},
+        norm_stats_dir=getattr(args, "norm_stats_dir", None),
     )
     return policy
