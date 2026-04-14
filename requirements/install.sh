@@ -464,6 +464,20 @@ install_openpi_model() {
             uv pip install git+${GITHUB_PREFIX}https://github.com/RLinf/openpi
             install_flash_attn
             ;;
+        liberopro)
+            create_and_sync_venv
+            install_common_embodied_deps
+            install_liberopro_env
+            uv pip install git+${GITHUB_PREFIX}https://github.com/RLinf/openpi
+            install_flash_attn
+            ;;
+        liberoplus)
+            create_and_sync_venv
+            install_common_embodied_deps
+            install_liberoplus_env
+            uv pip install git+${GITHUB_PREFIX}https://github.com/RLinf/openpi
+            install_flash_attn
+            ;;
         metaworld)
             create_and_sync_venv
             install_common_embodied_deps

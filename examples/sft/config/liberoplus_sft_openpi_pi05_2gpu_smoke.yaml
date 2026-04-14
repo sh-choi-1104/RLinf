@@ -1,0 +1,11 @@
+defaults:
+  - liberoplus_sft_openpi_pi05_2gpu
+
+runner:
+  save_interval: 1
+
+actor:
+  micro_batch_size: 1
+  global_batch_size: 2
+  optim:
+    total_training_steps: 1
