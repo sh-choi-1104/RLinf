@@ -53,6 +53,7 @@ fi
 export HF_LEROBOT_HOME
 export PI05_MODEL_PATH
 export LIBERO_PLUS_REPO_ID
+export CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES:-0}"
 export RAY_TMPDIR="${RAY_TMPDIR:-/data/ray_tmp}"
 mkdir -p "${RAY_TMPDIR}"
 
@@ -65,6 +66,7 @@ export RLINF_RUN_ROOT="${RLINF_RUN_ROOT:-/data/rlinf_runs}"
 
 echo "Using LeRobot root: ${HF_LEROBOT_HOME}"
 echo "Using dataset repo_id: ${LIBERO_PLUS_REPO_ID}"
+echo "Using CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES}"
 if [ ! -f "${HF_LEROBOT_HOME}/${LIBERO_PLUS_REPO_ID}/meta/info.json" ]; then
     echo "Dataset metadata not found at: ${HF_LEROBOT_HOME}/${LIBERO_PLUS_REPO_ID}/meta/info.json" >&2
     echo "Set HF_LEROBOT_HOME to dataset root, and LIBERO_PLUS_REPO_ID to dataset name only." >&2
@@ -91,4 +93,4 @@ else
     echo "WARNING: norm_stats.json not found and RUN_NORM_STATS=0; skipping." >&2
 fi
 
-bash "${SCRIPT_DIR}/run_vla_sft.sh" liberoplus_sft_openpi_pi05_2gpu "$@"
+bash "${SCRIPT_DIR}/run_vla_sft.sh" liberoplus_sft_openpi_pi05_1gpu "$@"

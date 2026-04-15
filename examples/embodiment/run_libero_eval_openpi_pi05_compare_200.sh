@@ -7,6 +7,7 @@ REPO_PATH="$(dirname "$(dirname "${SCRIPT_DIR}")")"
 OPENPI_VENV_PYTHON="${OPENPI_VENV_PYTHON:-${REPO_PATH}/.venv-openpi-liberoplus/bin/python}"
 BASE_LAUNCHER="${SCRIPT_DIR}/run_liberoplus_eval_openpi_pi05_base.sh"
 SUMMARY_SCRIPT="${REPO_PATH}/toolkits/eval_scripts_openpi/summarize_liberoplus_compare.py"
+GPU_DEVICE="${CUDA_VISIBLE_DEVICES:-0}"
 
 COMPARE_ROOT="${COMPARE_ROOT:-/data/rlinf_eval_runs_compare}"
 COMPARE_STAMP="${COMPARE_STAMP:-$(date +'%Y%m%d-%H:%M:%S')}"
@@ -50,21 +51,21 @@ runs = [
     {
         "model_name": "pi05_base",
         "model_path": "/data/models/pi05_base",
-        "gpu": "0",
+        "gpu": "${GPU_DEVICE}",
         "exp_name": "pi05_base_libero_200",
         "run_dir": str(compare_dir / "runs" / "${COMPARE_STAMP}-pi05_base_libero_200"),
     },
     {
         "model_name": "pi05_libero",
         "model_path": "/data/models/pi05_libero",
-        "gpu": "1",
+        "gpu": "${GPU_DEVICE}",
         "exp_name": "pi05_libero_libero_200",
         "run_dir": str(compare_dir / "runs" / "${COMPARE_STAMP}-pi05_libero_libero_200"),
     },
     {
         "model_name": "pi05_libero_base",
         "model_path": "/data/models/pi05_libero_base",
-        "gpu": "0",
+        "gpu": "${GPU_DEVICE}",
         "exp_name": "pi05_libero_base_libero_200",
         "run_dir": str(compare_dir / "runs" / "${COMPARE_STAMP}-pi05_libero_base_libero_200"),
     },
@@ -107,17 +108,10 @@ run_one() {
         > "${outer_log}" 2>&1
 }
 
-run_one "0" "pi05_base" "/data/models/pi05_base" "pi05_base_libero_200" &
-PID_BASE=$!
-run_one "1" "pi05_libero" "/data/models/pi05_libero" "pi05_libero_libero_200" &
-PID_LIBERO=$!
-
-wait "${PID_BASE}"
-run_one "0" "pi05_libero_base" "/data/models/pi05_libero_base" "pi05_libero_base_libero_200" &
-PID_LIBERO_BASE=$!
-
-wait "${PID_LIBERO}"
-wait "${PID_LIBERO_BASE}"
+echo "Using CUDA_VISIBLE_DEVICES=${GPU_DEVICE} for all compare runs"
+run_one "${GPU_DEVICE}" "pi05_base" "/data/models/pi05_base" "pi05_base_libero_200"
+run_one "${GPU_DEVICE}" "pi05_libero" "/data/models/pi05_libero" "pi05_libero_libero_200"
+run_one "${GPU_DEVICE}" "pi05_libero_base" "/data/models/pi05_libero_base" "pi05_libero_base_libero_200"
 
 "${OPENPI_VENV_PYTHON}" "${SUMMARY_SCRIPT}" \
     --compare_dir "${COMPARE_DIR}" \

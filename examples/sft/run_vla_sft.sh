@@ -6,6 +6,9 @@ export SRC_FILE="${EMBODIED_PATH}/train_vla_sft.py"
 
 export MUJOCO_GL="egl"
 export PYOPENGL_PLATFORM="egl"
+export CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES:-0}"
+export MUJOCO_EGL_DEVICE_ID="${MUJOCO_EGL_DEVICE_ID:-0}"
+export EGL_DEVICE_ID="${EGL_DEVICE_ID:-0}"
 
 export PYTHONPATH=${REPO_PATH}:${LIBERO_REPO_PATH}:$PYTHONPATH
 
@@ -17,6 +20,9 @@ else
 fi
 
 echo "Using Python at $(which python)"
+echo "Using CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES}"
+echo "Using MUJOCO_EGL_DEVICE_ID=${MUJOCO_EGL_DEVICE_ID}"
+echo "Using EGL_DEVICE_ID=${EGL_DEVICE_ID}"
 LOG_ROOT="${RLINF_RUN_ROOT:-${REPO_PATH}/logs}"
 LOG_DIR="${LOG_ROOT}/$(date +'%Y%m%d-%H:%M:%S')"
 MEGA_LOG_FILE="${LOG_DIR}/run_embodiment.log"

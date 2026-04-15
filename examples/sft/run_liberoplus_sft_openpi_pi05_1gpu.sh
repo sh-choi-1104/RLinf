@@ -53,6 +53,7 @@ fi
 export HF_LEROBOT_HOME
 export PI05_MODEL_PATH
 export LIBERO_PLUS_REPO_ID
+export CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES:-0}"
 
 OPENPI_VENV_PYTHON="${OPENPI_VENV_PYTHON:-${REPO_PATH}/.venv-openpi-liberoplus/bin/python}"
 if [ -x "${OPENPI_VENV_PYTHON}" ]; then
@@ -61,6 +62,7 @@ fi
 
 echo "Using LeRobot root: ${HF_LEROBOT_HOME}"
 echo "Using dataset repo_id: ${LIBERO_PLUS_REPO_ID}"
+echo "Using CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES}"
 if [ ! -f "${HF_LEROBOT_HOME}/${LIBERO_PLUS_REPO_ID}/meta/info.json" ]; then
     echo "Dataset metadata not found at: ${HF_LEROBOT_HOME}/${LIBERO_PLUS_REPO_ID}/meta/info.json" >&2
     echo "Set HF_LEROBOT_HOME to dataset root, and LIBERO_PLUS_REPO_ID to dataset name only." >&2
