@@ -10,6 +10,8 @@
 - RLinf repo는 `/workspace/RLinf`
 - 결과 저장 루트는 `/data/inference_results/liberoplus_action_debug`
 - 모델 경로는 `/data/models/pi05_libero_finetuned_v044`
+- 학습 / 평가 / 디버그 worker는 기본적으로 `CUDA_VISIBLE_DEVICES=0`만 사용
+- EGL 렌더링도 기본적으로 `MUJOCO_EGL_DEVICE_ID=0`, `EGL_DEVICE_ID=0`으로 고정
 
 ## 2. 주요 구성
 
@@ -19,6 +21,9 @@
   - 웹 서버
 - `libero_debug_worker`
   - policy / env 실행 worker
+
+내부 구현상 dashboard의 session/run-state backend는
+`toolkits/eval_scripts_openpi/libero_debug_dashboard_backend.py`로 분리되어 있다.
 
 ## 3. 데모 서버 실행
 
@@ -46,6 +51,9 @@ tmux new-session -d -s libero_debug_dashboard \
 - `--run_dir`는 부트스트랩용 placeholder다.
 - 실제 run directory는 dashboard가 worker를 띄우면서 자동으로 갱신한다.
 - `--session_name`은 dashboard가 제어할 worker tmux 세션 이름이다.
+- 기본 OpenPI Python은 `/workspace/RLinf/.venv-openpi-liberoplus/bin/python` 이다.
+- worker 자체는 launcher에서 기본적으로 `CUDA_VISIBLE_DEVICES=0`으로 뜬다.
+- 렌더링도 launcher에서 기본적으로 GPU 0으로 고정된다.
 
 ## 4. 세션 확인
 
@@ -161,6 +169,7 @@ ssh -N -L 8765:127.0.0.1:8765 SNU-104
 - `Suite`
 - `Task ID`
 - `Trial Index`
+- `Model Ckpt`
 
 그 다음 `Set Task`를 누른다.
 
@@ -168,6 +177,12 @@ ssh -N -L 8765:127.0.0.1:8765 SNU-104
 
 - `Libero Type` dropdown은 현재 환경에서 실제 import 가능한 type만 보여준다.
 - 예를 들어 `liberopro`가 설치되지 않았으면 `pro`는 dropdown에 나타나지 않는다.
+- `Task ID`는 기본적으로 비어 있으며, 직접 선택해야 한다.
+- `Model Ckpt`는 현재 worker가 사용할 checkpoint 경로다.
+- checkpoint 경로를 바꾸고 `Set Task`를 누르면 worker가 해당 모델로 다시 로드된다.
+- 별도 설정이 없으면 worker는 GPU 0에서만 실행된다.
+- `Reset`은 현재 worker와 dashboard history를 함께 비우고 idle 상태로 되돌린다.
+- live video/preview 파일은 중간 파일을 읽지 않도록 atomic replace 방식으로 갱신된다.
 
 의도:
 
@@ -179,6 +194,8 @@ ssh -N -L 8765:127.0.0.1:8765 SNU-104
 
 - progress가 `Chunk ready. Edit actions, Simulate, or Run.` 로 바뀜
 - live video가 시작 scene을 보여줌
+- live video 오른쪽에 현재 chunk planning에 사용된 `agentview` / `wrist` observation 이미지가 표시됨
+- obs state 8개 값도 라벨과 함께 표시됨
 
 ### 7.2 Simulate Chunk
 
@@ -192,6 +209,8 @@ ssh -N -L 8765:127.0.0.1:8765 SNU-104
 - action table 수정
 - `Simulate Chunk` 클릭
 - `live/current_chunk.mp4`가 수정값 기반 preview로 갱신
+- 우측 observation 패널은 같은 chunk를 계획할 때 사용한 입력 이미지를 유지
+- live pane은 브라우저 안정성을 위해 GIF preview를 기본으로 표시한다
 
 ### 7.3 Run Chunk
 
@@ -209,7 +228,7 @@ ssh -N -L 8765:127.0.0.1:8765 SNU-104
 
 ### 7.4 Reset Edits
 
-현재 action table을 policy 원본으로 되돌린다.
+현재 action table을 그 chunk에서 모델이 처음 출력한 원본값으로 되돌린다.
 
 ## 8. 콘솔에서 API 직접 호출하기
 
@@ -234,7 +253,7 @@ curl -s "http://127.0.0.1:8765/api/task_catalog?libero_type=plus" | python3 -m j
 ```bash
 curl -s -X POST http://127.0.0.1:8765/api/set_task \
   -H 'Content-Type: application/json' \
-  -d '{"libero_type":"plus","suite_name":"libero_goal","task_id":1716,"trial_idx":0}' \
+  -d '{"libero_type":"plus","suite_name":"libero_goal","task_id":1716,"trial_idx":0,"model_path":"/data/models/pi05_libero_finetuned_v044"}' \
   | python3 -m json.tool
 ```
 

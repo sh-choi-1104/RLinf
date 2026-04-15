@@ -8,9 +8,17 @@
 
 - [toolkits/eval_scripts_openpi/libero_debug_action_chunk.py](/workspace/RLinf/toolkits/eval_scripts_openpi/libero_debug_action_chunk.py)
 - [toolkits/eval_scripts_openpi/libero_debug_video_dashboard.py](/workspace/RLinf/toolkits/eval_scripts_openpi/libero_debug_video_dashboard.py)
+- [toolkits/eval_scripts_openpi/libero_debug_dashboard_backend.py](/workspace/RLinf/toolkits/eval_scripts_openpi/libero_debug_dashboard_backend.py)
 - [examples/embodiment/run_liberoplus_debug_action_chunk_openpi_pi05_base.sh](/workspace/RLinf/examples/embodiment/run_liberoplus_debug_action_chunk_openpi_pi05_base.sh)
 
 이 문서는 "현재 어떤 의도로 설계되어 있고, 각 버튼이 어떤 의미를 가지는지"를 설명하는 데 집중한다.
+
+현재 기본 운영 가정은 다음과 같다.
+
+- RLinf 내부 경로만 사용한다.
+- 기본 checkpoint는 `/data/models/pi05_libero_finetuned_v044`다.
+- 학습 / 평가 / 디버그 worker는 기본적으로 `CUDA_VISIBLE_DEVICES=0`만 사용한다.
+- EGL 렌더링도 기본적으로 `MUJOCO_EGL_DEVICE_ID=0`, `EGL_DEVICE_ID=0`으로 고정한다.
 
 ## 2. 목표
 
@@ -59,9 +67,12 @@
 쉘 스크립트 `run_liberoplus_debug_action_chunk_openpi_pi05_base.sh`가 다음을 담당한다.
 
 - OpenPI / LIBERO 계열 가상환경 선택
+- 기본 OpenPI Python 경로는 `/workspace/RLinf/.venv-openpi-liberoplus/bin/python`
 - RLinf repo를 `PYTHONPATH`에 추가
 - LIBERO / LIBERO-Plus asset path 구성
 - 모델 경로, suite, task id, type, video 옵션 등 환경변수 수집
+- worker 실행 전에 기본 GPU를 `CUDA_VISIBLE_DEVICES=0`으로 고정
+- EGL 렌더링 GPU도 `MUJOCO_EGL_DEVICE_ID=0`, `EGL_DEVICE_ID=0`으로 고정
 - 실제 debug worker Python 프로세스 실행
 
 ### 4.2 Debug Worker 레이어
@@ -82,10 +93,13 @@
 `libero_debug_video_dashboard.py`가 다음을 담당한다.
 
 - 현재 run directory를 읽어서 웹에 상태 제공
-- tmux worker 세션 제어
 - task metadata 조회 및 캐시
 - 버튼 입력을 API로 변환
 - HTML/JS 렌더링
+
+참고:
+
+- dashboard의 tmux/session/run-state backend 로직은 `libero_debug_dashboard_backend.py` 로 분리되어 있다.
 
 ## 5. 세션 설계
 
@@ -134,12 +148,17 @@ run directory는 대략 다음 형태를 가진다.
 - `Suite`
 - `Task ID`
 - `Trial Index`
+- `Model Ckpt`
 - `Set Task`
+- `Reset`
 - `Selected Task Info`
 - `Suite Task Counts`
 - 현재 세션 정보
 - 현재 run directory
 - progress bar
+
+`Model Ckpt`의 기본값은 `/data/models/pi05_libero_finetuned_v044`다.
+`Task ID`는 기본적으로 비어 있고, 사용자가 직접 선택해야 한다.
 
 ### Selected Task Info
 
@@ -168,14 +187,25 @@ taxonomy는 `plus`일 때만 의미가 있고, `standard`나 `pro`에서는 `n/a
 
 이 패널은 3개의 영역으로 구성된다.
 
-### 좌측 상단: Live Video + 실행 버튼
+### 좌측 상단: Live Preview + 실행 버튼
 
-- 현재 live preview mp4
+- 현재 live preview GIF
 - `Simulate Chunk`
 - `Run Chunk`
 - `Reset Edits`
 
-### 우측 상단: 상태 카드
+참고:
+
+- live pane은 브라우저 렌더링 안정성을 위해 GIF를 기본으로 사용한다.
+- 안정적인 mp4 확인은 `Completed Chunk Preview` 영역에서 보는 것을 기본 흐름으로 둔다.
+
+### 중앙 상단: Observation Inputs
+
+- 모델 inference에 실제로 들어간 `agentview` observation 이미지
+- 모델 inference에 실제로 들어간 `wrist` observation 이미지
+- 현재 chunk를 계획할 때 사용한 입력 관측을 그대로 보여줌
+
+### 우측 상단: compact 상태 카드
 
 - phase
 - libero type
@@ -186,6 +216,18 @@ taxonomy는 `plus`일 때만 의미가 있고, `standard`나 `pro`에서는 `n/a
 - env step
 - taxonomy
 - 마지막 action 등
+- observation state 8개 값의 의미 라벨
+
+observation state 8개는 현재 다음 순서로 표시된다.
+
+- `eef_pos_x`
+- `eef_pos_y`
+- `eef_pos_z`
+- `eef_axisangle_x`
+- `eef_axisangle_y`
+- `eef_axisangle_z`
+- `gripper_left_qpos`
+- `gripper_right_qpos`
 
 ### 하단 전체폭: Action Editor
 
@@ -194,7 +236,8 @@ action editor는 `Live Chunk / Status` 섹션 내부 하단에서 전체 폭을 
 의도는 다음과 같다.
 
 - 영상/버튼은 왼쪽에 고정
-- 상태 정보는 오른쪽 카드로 요약
+- observation 이미지는 영상 오른쪽에 작은 패널로 배치
+- 상태 정보는 그 오른쪽에 compact 카드와 상세 라인으로 요약
 - action table은 둘 아래에서 가로 전체를 사용
 
 ## 7.3 Completed Chunk Preview
@@ -219,15 +262,25 @@ action editor는 `Live Chunk / Status` 섹션 내부 하단에서 전체 폭을 
 의도:
 
 - 새로운 task를 고른다.
+- 현재 입력한 checkpoint path도 함께 적용한다.
 - 가능하면 같은 모델 세션을 재사용한다.
 - type이 바뀌지 않으면 worker 안에서 task만 switch한다.
-- type이 바뀌면 worker를 새로 띄운다.
+- type이나 model ckpt path가 바뀌면 worker를 새로 띄운다.
 
 결과:
 
 - task 시작 scene이 바로 live preview로 보인다.
 - 첫 번째 policy chunk도 함께 준비된다.
 - phase는 `awaiting_chunk_execution`으로 들어간다.
+- 현재 입력된 model ckpt path가 worker에 그대로 적용된다.
+
+## 8.1.1 Reset
+
+의도:
+
+- 현재 worker 세션을 정리한다.
+- 현재 run directory 기준의 live status / trace / chunk preview 같은 이전 히스토리를 dashboard에서 지운다.
+- dashboard를 다시 idle 상태로 돌린다.
 
 ## 8.2 Simulate Chunk
 
@@ -276,7 +329,7 @@ action editor는 `Live Chunk / Status` 섹션 내부 하단에서 전체 폭을 
 
 의도:
 
-- 현재 편집 중인 action table을 policy 원본 값으로 되돌린다.
+- 현재 편집 중인 action table을 그 chunk에서 모델이 처음 출력했던 원본 값으로 되돌린다.
 
 ## 9. 상태 머신
 
@@ -367,8 +420,20 @@ catalog는 다음 정보를 가진다.
 - action editor는 편집 중 focus out이 자주 발생하지 않을 것
 - plus에서 taxonomy가 표시될 것
 - suite별 task count가 표시될 것
+- live video 옆에 현재 chunk planning에 사용된 observation 이미지가 보여질 것
 
-## 15. 향후 개선 후보
+## 15. 운영 정책
+
+- RLinf 내부 구현만 사용
+- task switch는 가능한 한 worker를 재사용
+- type 또는 model ckpt path 변경 시에는 worker를 재시작할 수 있음
+- simulate와 run은 명확히 분리
+- stable media와 live media는 분리
+- live/stable media 파일은 atomic replace 방식으로 갱신
+- 학습 / 평가 / 디버그 런처 기본 GPU는 `CUDA_VISIBLE_DEVICES=0`
+- EGL 렌더링도 기본적으로 GPU 0을 사용
+
+## 16. 향후 개선 후보
 
 - task id 대신 task name 검색
 - taxonomy별 필터링

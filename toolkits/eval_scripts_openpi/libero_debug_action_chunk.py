@@ -19,9 +19,11 @@ import collections
 import contextlib
 import io
 import json
+import os
 import pathlib
 import shlex
 import sys
+import tempfile
 from typing import Any
 
 import imageio
@@ -45,6 +47,16 @@ from toolkits.eval_scripts_openpi.libero_eval import (
 )
 
 ACTION_DIM_LABELS = ["eef_x", "eef_y", "eef_z", "rot_x", "rot_y", "rot_z", "gripper"]
+OBSERVATION_STATE_LABELS = [
+    "eef_pos_x",
+    "eef_pos_y",
+    "eef_pos_z",
+    "eef_axisangle_x",
+    "eef_axisangle_y",
+    "eef_axisangle_z",
+    "gripper_left_qpos",
+    "gripper_right_qpos",
+]
 DEBUG_SUITE_CHOICES = ["libero_spatial", "libero_object", "libero_goal", "libero_10", "libero_90"]
 
 
@@ -143,7 +155,7 @@ def _parse_switch_request(
 def _save_action_chunk_json(path: pathlib.Path, actions: np.ndarray):
     path.parent.mkdir(parents=True, exist_ok=True)
     payload = {"actions": [[float(value) for value in row] for row in actions.tolist()]}
-    path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    _atomic_write_text(path, json.dumps(payload, indent=2))
 
 
 def _append_jsonl(record: dict[str, Any], out_path: pathlib.Path):
@@ -162,16 +174,79 @@ def _prepare_media_frames(
     return frames
 
 
+def _make_atomic_tmp_path(out_path: pathlib.Path) -> pathlib.Path:
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp_name = tempfile.mkstemp(
+        dir=str(out_path.parent),
+        prefix=f".{out_path.stem}.",
+        suffix=out_path.suffix,
+    )
+    os.close(fd)
+    return pathlib.Path(tmp_name)
+
+
+def _atomic_write_text(out_path: pathlib.Path, text: str):
+    tmp_path = _make_atomic_tmp_path(out_path)
+    try:
+        tmp_path.write_text(text, encoding="utf-8")
+        os.replace(tmp_path, out_path)
+    finally:
+        if tmp_path.exists():
+            tmp_path.unlink(missing_ok=True)
+
+
+def _atomic_imwrite(out_path: pathlib.Path, image: np.ndarray):
+    tmp_path = _make_atomic_tmp_path(out_path)
+    try:
+        imageio.imwrite(tmp_path, np.asarray(image))
+        os.replace(tmp_path, out_path)
+    finally:
+        if tmp_path.exists():
+            tmp_path.unlink(missing_ok=True)
+
+
+def _atomic_mimwrite(out_path: pathlib.Path, frames: list[np.ndarray], fps: int):
+    tmp_path = _make_atomic_tmp_path(out_path)
+    try:
+        imageio.mimwrite(tmp_path, frames, fps=fps)
+        os.replace(tmp_path, out_path)
+    finally:
+        if tmp_path.exists():
+            tmp_path.unlink(missing_ok=True)
+
+
+def _atomic_mimsave(out_path: pathlib.Path, frames: list[np.ndarray], *, duration: float):
+    tmp_path = _make_atomic_tmp_path(out_path)
+    try:
+        imageio.mimsave(tmp_path, frames, format="GIF", duration=duration)
+        os.replace(tmp_path, out_path)
+    finally:
+        if tmp_path.exists():
+            tmp_path.unlink(missing_ok=True)
+
+
 def _write_live_status(run_dir: pathlib.Path, payload: dict[str, Any]):
     live_dir = run_dir / "live"
     live_dir.mkdir(parents=True, exist_ok=True)
-    (live_dir / "status.json").write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    _atomic_write_text(live_dir / "status.json", json.dumps(payload, indent=2))
 
 
 def _write_latest_frame(run_dir: pathlib.Path, frame: np.ndarray):
     live_dir = run_dir / "live"
     live_dir.mkdir(parents=True, exist_ok=True)
-    imageio.imwrite(live_dir / "latest_frame.jpg", np.asarray(frame))
+    _atomic_imwrite(live_dir / "latest_frame.jpg", np.asarray(frame))
+
+
+def _write_policy_observation_images(
+    run_dir: pathlib.Path,
+    image: np.ndarray,
+    wrist_image: np.ndarray | None = None,
+):
+    live_dir = run_dir / "live"
+    live_dir.mkdir(parents=True, exist_ok=True)
+    _atomic_imwrite(live_dir / "observation_image.jpg", np.asarray(image))
+    if wrist_image is not None:
+        _atomic_imwrite(live_dir / "observation_wrist_image.jpg", np.asarray(wrist_image))
 
 
 def _write_live_chunk_video(
@@ -187,11 +262,7 @@ def _write_live_chunk_video(
     out_path = live_dir / "current_chunk.mp4"
     fps = max(1, 30 // max(1, video_temp_subsample))
     frames = _prepare_media_frames(replay_images, video_temp_subsample)
-    imageio.mimwrite(
-        out_path,
-        frames,
-        fps=fps,
-    )
+    _atomic_mimwrite(out_path, frames, fps=fps)
     return out_path
 
 
@@ -207,7 +278,7 @@ def _write_live_chunk_gif(
     live_dir.mkdir(parents=True, exist_ok=True)
     out_path = live_dir / "current_chunk.gif"
     frames = _prepare_media_frames(replay_images, video_temp_subsample)
-    imageio.mimsave(out_path, frames, format="GIF", duration=0.15)
+    _atomic_mimsave(out_path, frames, duration=0.15)
     return out_path
 
 
@@ -253,11 +324,7 @@ def _save_chunk_video(
     )
     fps = max(1, 30 // max(1, video_temp_subsample))
     frames = _prepare_media_frames(replay_images, video_temp_subsample)
-    imageio.mimwrite(
-        out_path,
-        frames,
-        fps=fps,
-    )
+    _atomic_mimwrite(out_path, frames, fps=fps)
     return out_path
 
 
@@ -279,7 +346,7 @@ def _save_chunk_gif(
         f"{suite_name}_task{task_id:04d}_chunk{chunk_idx:03d}_{_sanitize_filename(task_name)}.gif"
     )
     frames = _prepare_media_frames(replay_images, video_temp_subsample)
-    imageio.mimsave(out_path, frames, format="GIF", duration=0.15)
+    _atomic_mimsave(out_path, frames, duration=0.15)
     return out_path
 
 
@@ -297,8 +364,8 @@ def _write_live_completed_chunk_media(
     if replay_images:
         fps = max(1, 30 // max(1, video_temp_subsample))
         frames = _prepare_media_frames(replay_images, video_temp_subsample)
-        imageio.mimwrite(mp4_path, frames, fps=fps)
-        imageio.mimsave(gif_path, frames, format="GIF", duration=0.15)
+        _atomic_mimwrite(mp4_path, frames, fps=fps)
+        _atomic_mimsave(gif_path, frames, duration=0.15)
         return {
             "last_completed_chunk_mp4": str(mp4_path),
             "last_completed_chunk_gif": str(gif_path),
@@ -649,7 +716,7 @@ def _save_debug_rollout_video(
     )
     fps = max(1, 30 // max(1, video_temp_subsample))
     frames = _prepare_media_frames(replay_images, video_temp_subsample)
-    imageio.mimwrite(out_path, frames, fps=fps)
+    _atomic_mimwrite(out_path, frames, fps=fps)
     return out_path
 
 
@@ -752,6 +819,7 @@ def main(args):
         current_chunk_frames: list[np.ndarray] = []
         current_plan_status: dict[str, Any] = {
             "action_dim_labels": ACTION_DIM_LABELS,
+            "observation_state_labels": OBSERVATION_STATE_LABELS,
             "predicted_actions": None,
             "current_plan_actions": None,
             "edit_history": [],
@@ -805,6 +873,7 @@ def main(args):
                 edit_history: list[str] = []
                 current_plan_status = {
                     "action_dim_labels": ACTION_DIM_LABELS,
+                    "observation_state_labels": OBSERVATION_STATE_LABELS,
                     "observation_state": [float(value) for value in state.tolist()],
                     "predicted_actions": [[float(value) for value in row] for row in predicted_actions.tolist()],
                     "current_plan_actions": [[float(value) for value in row] for row in edited_actions.tolist()],
@@ -812,6 +881,11 @@ def main(args):
                 }
                 scene_preview_media: dict[str, str | None] = {}
                 if args.save_live_preview:
+                    _write_policy_observation_images(
+                        run_dir=run_dir,
+                        image=img,
+                        wrist_image=wrist_img,
+                    )
                     scene_preview_media = _write_live_scene_preview(
                         run_dir=run_dir,
                         frame=img,
@@ -854,6 +928,7 @@ def main(args):
                     def _simulate_preview_callback(simulated_actions, simulated_edit_history):
                         preview_plan_status = {
                             "action_dim_labels": ACTION_DIM_LABELS,
+                            "observation_state_labels": OBSERVATION_STATE_LABELS,
                             "observation_state": [float(value) for value in state.tolist()],
                             "predicted_actions": [
                                 [float(value) for value in row] for row in predicted_actions.tolist()
@@ -1011,6 +1086,7 @@ def main(args):
                 action_plan.extend(chunk_step_plan)
                 current_plan_status = {
                     "action_dim_labels": ACTION_DIM_LABELS,
+                    "observation_state_labels": OBSERVATION_STATE_LABELS,
                     "observation_state": [float(value) for value in state.tolist()],
                     "predicted_actions": [[float(value) for value in row] for row in predicted_actions.tolist()],
                     "current_plan_actions": [[float(value) for value in row] for row in edited_actions.tolist()],
