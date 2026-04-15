@@ -19,6 +19,21 @@ AVAILABLE_SUITES = ["libero_spatial", "libero_object", "libero_goal", "libero_10
 BUILD_TOKEN = dt.datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S UTC")
 
 
+def _build_openpi_pythonpath(repo_path: pathlib.Path, openpi_venv_python: pathlib.Path) -> str:
+    openpi_venv_root = openpi_venv_python.parent.parent
+    pythonpath_parts = [str(repo_path)]
+    libero_site = openpi_venv_root / "libero"
+    libero_plus_site = openpi_venv_root / "libero_plus"
+    if libero_site.exists():
+        pythonpath_parts.append(str(libero_site))
+    if libero_plus_site.exists():
+        pythonpath_parts.append(str(libero_plus_site))
+    existing_pythonpath = os.environ.get("PYTHONPATH")
+    if existing_pythonpath:
+        pythonpath_parts.append(existing_pythonpath)
+    return ":".join(pythonpath_parts)
+
+
 def _safe_relative_path(raw_path: str) -> pathlib.PurePosixPath:
     normalized = posixpath.normpath(unquote(raw_path)).lstrip("/")
     path = pathlib.PurePosixPath(normalized)
@@ -175,8 +190,31 @@ class DebugSessionController:
         self.default_config = default_config
         self.last_launch_config = default_config.copy()
         self.state_file = self.debug_root / ".dashboard_controller_state.json"
+        self.openpi_pythonpath = _build_openpi_pythonpath(self.repo_path, self.openpi_venv_python)
+        self.available_libero_types = self._detect_available_libero_types()
         self._task_catalog_cache: dict[str, dict] = {}
         self._load_state_file()
+
+    def _detect_available_libero_types(self) -> list[str]:
+        import_scripts = {
+            "plus": "import liberoplus.liberoplus",
+            "pro": "import liberopro.liberopro",
+            "standard": "import libero.libero",
+        }
+        available = []
+        for libero_type in AVAILABLE_LIBERO_TYPES:
+            env = dict(os.environ)
+            env["PYTHONPATH"] = self.openpi_pythonpath
+            result = subprocess.run(
+                [str(self.openpi_venv_python), "-c", import_scripts[libero_type]],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                check=False,
+                env=env,
+            )
+            if result.returncode == 0:
+                available.append(libero_type)
+        return available or ["plus"]
 
     def _load_state_file(self):
         if not self.state_file.exists():
@@ -294,12 +332,15 @@ class DebugSessionController:
     def current_libero_type(self) -> str:
         live_status = self.current_live_status()
         live_type = str(live_status.get("libero_type") or "")
-        if live_type in AVAILABLE_LIBERO_TYPES:
+        if live_type in self.available_libero_types:
             return live_type
         remembered_type = str(self.last_launch_config.get("libero_type") or "")
-        if remembered_type in AVAILABLE_LIBERO_TYPES:
+        if remembered_type in self.available_libero_types:
             return remembered_type
-        return self.default_config["libero_type"]
+        default_type = self.default_config["libero_type"]
+        if default_type in self.available_libero_types:
+            return default_type
+        return self.available_libero_types[0]
 
     def ensure_session_started(self) -> dict | None:
         if self.session_alive():
@@ -356,19 +397,8 @@ for suite_name in suite_names:
 
 print(json.dumps(payload))
 """
-        openpi_venv_root = self.openpi_venv_python.parent.parent
-        pythonpath_parts = [str(self.repo_path)]
-        libero_site = openpi_venv_root / "libero"
-        libero_plus_site = openpi_venv_root / "libero_plus"
-        if libero_site.exists():
-            pythonpath_parts.append(str(libero_site))
-        if libero_plus_site.exists():
-            pythonpath_parts.append(str(libero_plus_site))
         catalog_env = dict(os.environ)
-        existing_pythonpath = catalog_env.get("PYTHONPATH")
-        if existing_pythonpath:
-            pythonpath_parts.append(existing_pythonpath)
-        catalog_env["PYTHONPATH"] = ":".join(pythonpath_parts)
+        catalog_env["PYTHONPATH"] = self.openpi_pythonpath
         result = subprocess.run(
             [
                 str(self.openpi_venv_python),
@@ -394,7 +424,7 @@ print(json.dumps(payload))
 
     def set_task(self, *, libero_type: str, suite_name: str, task_id: int, trial_idx: int) -> dict:
         target_type = str(libero_type or self.current_libero_type())
-        if target_type not in AVAILABLE_LIBERO_TYPES:
+        if target_type not in self.available_libero_types:
             raise ValueError(f"Unsupported libero_type={target_type}")
         if (not self.session_alive()) or target_type != self.current_libero_type():
             launch_config = self.last_launch_config.copy()
@@ -476,7 +506,7 @@ print(json.dumps(payload))
 
         libero_type = str(config.get("libero_type", self.default_config["libero_type"]))
         suite_name = str(config.get("task_suite_name", self.default_config["task_suite_name"]))
-        if libero_type not in AVAILABLE_LIBERO_TYPES:
+        if libero_type not in self.available_libero_types:
             raise ValueError(f"Unsupported libero_type={libero_type}")
         if suite_name not in AVAILABLE_SUITES:
             raise ValueError(f"Unsupported task_suite_name={suite_name}")
@@ -599,7 +629,7 @@ print(json.dumps(payload))
             "current_run_dir": str(self.current_run_dir) if self.current_run_dir else None,
             "defaults": self.default_config,
             "last_launch_config": self.last_launch_config,
-            "available_libero_types": AVAILABLE_LIBERO_TYPES,
+            "available_libero_types": self.available_libero_types,
             "available_suites": AVAILABLE_SUITES,
             "tmux_tail": tmux_tail,
             "build_token": BUILD_TOKEN,
@@ -653,8 +683,8 @@ def _render_select_options(options: list[str], selected: str) -> str:
     return "".join(html_parts)
 
 
-def _index_html(refresh_ms: int, build_token: str) -> str:
-    default_type_options = _render_select_options(AVAILABLE_LIBERO_TYPES, "plus")
+def _index_html(refresh_ms: int, build_token: str, available_libero_types: list[str]) -> str:
+    default_type_options = _render_select_options(available_libero_types, "plus")
     default_suite_options = _render_select_options(AVAILABLE_SUITES, "libero_goal")
     return f"""<!doctype html>
 <html>
@@ -2073,7 +2103,11 @@ class DebugDashboardHandler(BaseHTTPRequestHandler):
 
         if request_path == "/" or request_path.startswith("/index.html"):
             self._write_bytes(
-                _index_html(self.server.refresh_ms, BUILD_TOKEN).encode("utf-8"),
+                _index_html(
+                    self.server.refresh_ms,
+                    BUILD_TOKEN,
+                    self._controller().available_libero_types,
+                ).encode("utf-8"),
                 "text/html; charset=utf-8",
             )
             return

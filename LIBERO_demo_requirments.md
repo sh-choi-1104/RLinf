@@ -27,9 +27,9 @@
 현재 데모 UI는 다음 범위를 지원한다.
 
 - LIBERO type 선택
-  - `plus`
-  - `standard`
-  - `pro`
+  - 설치된 패키지 기준으로 동적으로 노출
+  - 예: `plus`, `standard`
+  - `pro` 패키지가 설치되지 않은 환경에서는 dropdown에 보이지 않음
 - suite 선택
   - `libero_spatial`
   - `libero_object`
@@ -48,7 +48,7 @@
 
 - taxonomy 표시는 `plus`일 때만 의미가 있다.
 - `standard`와 `plus`는 실제로 smoke test가 수행된 상태다.
-- `pro`는 UI/코드 경로상 지원되도록 열려 있지만, 환경 설치 상태에 따라 런타임 가용성은 별도 확인이 필요하다.
+- type dropdown은 현재 OpenPI venv에서 import 가능한 패키지만 보여준다.
 
 ## 4. 상위 구조
 
@@ -328,6 +328,8 @@ catalog는 다음 정보를 가진다.
 - 선택한 OpenPI venv의 Python 사용
 - RLinf repo 및 LIBERO package 경로를 `PYTHONPATH`에 주입
 - `libero_eval.py`의 `_import_libero_stack`, `_load_taxonomy_lookup` 재사용
+
+또한 dashboard는 시작 시점에 각 type import 가능 여부를 검사하고, 실제로 사용 가능한 type만 UI에 노출한다.
 
 이렇게 해야 웹 UI가 RLinf 내부 정보만으로 metadata를 일관되게 읽을 수 있다.
 

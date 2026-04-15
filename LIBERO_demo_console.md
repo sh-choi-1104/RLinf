@@ -164,6 +164,11 @@ ssh -N -L 8765:127.0.0.1:8765 SNU-104
 
 그 다음 `Set Task`를 누른다.
 
+참고:
+
+- `Libero Type` dropdown은 현재 환경에서 실제 import 가능한 type만 보여준다.
+- 예를 들어 `liberopro`가 설치되지 않았으면 `pro`는 dropdown에 나타나지 않는다.
+
 의도:
 
 - 같은 type이면 worker 안에서 task만 switch
